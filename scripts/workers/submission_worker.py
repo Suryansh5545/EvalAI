@@ -748,5 +748,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
     logger.info("Quitting Submission Worker.")

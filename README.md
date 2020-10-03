@@ -93,4 +93,4 @@ EvalAI is currently maintained by [Deshraj Yadav](http://deshraj.xyz/) and [Rish
 
 ## Contribution guidelines
 
-If you are interested in contributing to EvalAI, follow our [contribution guidelines](https://github.com/Cloud-CV/EvalAI/blob/master/.github/CONTRIBUTING.md).
+If you are interested in contributing to EvalAI, follow our [contribution guidelines](https://github.com/Cloud-CV/EvalAI/blob/master/.github/CONTRIBUTING.md)

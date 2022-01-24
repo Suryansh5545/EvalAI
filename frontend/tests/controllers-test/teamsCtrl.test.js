@@ -257,8 +257,8 @@ describe('Unit tests for teams controller', function () {
             `participants/participant_team`', function () {;
                 success = true;
                 successResponse = response;
-                vm.team.name = "Team Name";
-                vm.team.url = "https://team.url";
+                vm.team.teamName = "Team Name";
+                vm.team.teamUrl = "https://team.url";
                 vm.createNewTeam();
                 expect(vm.isExistLoader).toBeTruthy();
                 expect(vm.loaderTitle).toEqual('');
@@ -384,8 +384,8 @@ describe('Unit tests for teams controller', function () {
             var ev = new Event('click');
             vm.showMdDialog(ev, participantTeamId);
             expect(vm.participantTeamId).toEqual(participantTeamId);
-            expect(vm.team.name).toEqual(successResponse.team_name);
-            expect(vm.team.url).toEqual(successResponse.team_url);
+            expect(vm.team.teamName).toEqual(successResponse.team_name);
+            expect(vm.team.teamUrl).toEqual(successResponse.team_url);
         });
 
         it('backend error', function () {
@@ -461,21 +461,21 @@ describe('Unit tests for teams controller', function () {
             var updateParticipantTeamDataForm = true;
             success = false;
             errorResponse = {
-                team_name:['team name error'],
-                error: ['error']	
+                team_name: 'team name error',
+                error: 'error'	
             };
             vm.updateParticipantTeamData(updateParticipantTeamDataForm);
-            expect($rootScope.notify).toHaveBeenCalledWith("error", errorResponse.team_name[0]);
+            expect($rootScope.notify).toHaveBeenCalledWith("error", errorResponse.team_name);
         });
 
         it('other backend error', function () {
             var updateParticipantTeamDataForm = true;
             success = false;
             errorResponse = {
-                error: ['error']	
+                error: 'error'	
             };
             vm.updateParticipantTeamData(updateParticipantTeamDataForm);
-            expect($rootScope.notify).toHaveBeenCalledWith("error", errorResponse.error[0]);
+            expect($rootScope.notify).toHaveBeenCalledWith("error", errorResponse.error);
         });
 
         it('invalid form submission', function () {

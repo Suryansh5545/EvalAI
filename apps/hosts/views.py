@@ -12,9 +12,11 @@ from rest_framework_expiring_authtoken.authentication import (
     ExpiringTokenAuthentication,
 )
 from rest_framework.throttling import UserRateThrottle
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from accounts.permissions import HasVerifiedEmail
-from base.utils import paginated_queryset
+from base.utils import get_model_object, team_paginated_queryset
+from .filters import HostTeamsFilter
 from .models import ChallengeHost, ChallengeHostTeam
 from .serializers import (
     ChallengeHostSerializer,
@@ -24,13 +26,19 @@ from .serializers import (
 )
 from .utils import is_user_part_of_host_team
 
+get_challenge_host_model = get_model_object(ChallengeHost)
+
 
 @api_view(["GET", "POST"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes(
+    (
+        JWTAuthentication,
+        ExpiringTokenAuthentication,
+    )
+)
 def challenge_host_team_list(request):
-
     if request.method == "GET":
         challenge_host_team_ids = ChallengeHost.objects.filter(
             user=request.user
@@ -38,8 +46,11 @@ def challenge_host_team_list(request):
         challenge_host_teams = ChallengeHostTeam.objects.filter(
             id__in=challenge_host_team_ids
         ).order_by("-id")
-        paginator, result_page = paginated_queryset(
-            challenge_host_teams, request
+        filtered_teams = HostTeamsFilter(
+            request.GET, queryset=challenge_host_teams
+        )
+        paginator, result_page = team_paginated_queryset(
+            filtered_teams.qs, request
         )
         serializer = HostTeamDetailSerializer(result_page, many=True)
         response_data = serializer.data
@@ -56,10 +67,10 @@ def challenge_host_team_list(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view(["GET", "PUT", "PATCH", "DELETE"])
+@api_view(["GET", "PUT", "PATCH"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def challenge_host_team_detail(request, pk):
     try:
         challenge_host_team = ChallengeHostTeam.objects.get(pk=pk)
@@ -96,15 +107,11 @@ def challenge_host_team_detail(request, pk):
                 serializer.errors, status=status.HTTP_400_BAD_REQUEST
             )
 
-    elif request.method == "DELETE":
-        challenge_host_team.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
 
 @api_view(["GET", "POST"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def challenge_host_list(request, challenge_host_team_pk):
 
     try:
@@ -128,7 +135,9 @@ def challenge_host_list(request, challenge_host_team_pk):
         challenge_host = ChallengeHost.objects.filter(
             **filter_condition
         ).order_by("-id")
-        paginator, result_page = paginated_queryset(challenge_host, request)
+        paginator, result_page = team_paginated_queryset(
+            challenge_host, request
+        )
         serializer = ChallengeHostSerializer(result_page, many=True)
         response_data = serializer.data
         return paginator.get_paginated_response(response_data)
@@ -151,7 +160,7 @@ def challenge_host_list(request, challenge_host_team_pk):
 @api_view(["GET", "PUT", "PATCH", "DELETE"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def challenge_host_detail(request, challenge_host_team_pk, pk):
     try:
         challenge_host_team = ChallengeHostTeam.objects.get(
@@ -161,11 +170,7 @@ def challenge_host_detail(request, challenge_host_team_pk, pk):
         response_data = {"error": "ChallengeHostTeam does not exist"}
         return Response(response_data, status=status.HTTP_406_NOT_ACCEPTABLE)
 
-    try:
-        challenge_host = ChallengeHost.objects.get(pk=pk)
-    except ChallengeHost.DoesNotExist:
-        response_data = {"error": "ChallengeHost does not exist"}
-        return Response(response_data, status=status.HTTP_406_NOT_ACCEPTABLE)
+    challenge_host = get_challenge_host_model(pk)
 
     if request.method == "GET":
         serializer = ChallengeHostSerializer(challenge_host)
@@ -209,7 +214,7 @@ def challenge_host_detail(request, challenge_host_team_pk, pk):
 @api_view(["POST"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def create_challenge_host_team(request):
 
     serializer = ChallengeHostTeamSerializer(
@@ -233,7 +238,7 @@ def create_challenge_host_team(request):
 @api_view(["DELETE"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def remove_self_from_challenge_host_team(request, challenge_host_team_pk):
     """
     A user can remove himself from the challenge host team.
@@ -257,7 +262,7 @@ def remove_self_from_challenge_host_team(request, challenge_host_team_pk):
 @api_view(["POST"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def invite_host_to_team(request, pk):
 
     try:

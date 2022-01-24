@@ -7,11 +7,12 @@
         .module('evalai')
         .controller('AuthCtrl', AuthCtrl);
 
-    AuthCtrl.$inject = ['utilities', '$state', '$rootScope', '$timeout'];
+    AuthCtrl.$inject = ['utilities', '$state', '$rootScope'];
 
     function AuthCtrl(utilities, $state, $rootScope) {
         var vm = this;
-
+        // condition for showing password strength
+        vm.showPasswordStrength = false;
         vm.isRem = false;
         vm.isAuth = false;
         vm.isMail = true;
@@ -102,10 +103,49 @@
                     onSuccess: function(response) {
                         if (response.status == 201) {
                             vm.isFormError = false;
-                            // vm.regMsg = "Registered successfully, Login to continue!";
+                            // Redirecting to Dashboard on Signup with limited privilege
                             $rootScope.notify("success", "Registered successfully. Please verify your email address!");
-                            $state.go('auth.login');
-                        }
+                            vm.startLoader("Taking you to EvalAI!");
+                            // call utility service
+                            var loginParameters = {};
+                            loginParameters.url = 'auth/login/';
+                            loginParameters.method = 'POST';
+                            loginParameters.data = {
+                                "username": vm.regUser.name,
+                                "password": vm.regUser.password,
+                            };
+                            loginParameters.callback = {
+                                onSuccess: function(response) {
+                                    if (response.status == 200) {
+                                        utilities.storeData('userKey', response.data.token);
+                                        if ($rootScope.previousState) {
+                                            $state.go($rootScope.previousState);
+                                            vm.stopLoader();
+                                        } else {
+                                            $state.go('web.dashboard');
+                                        }
+                                    } else {
+                                        alert("Something went wrong");
+                                    }
+                                },
+                                onError: function(response) {
+                                    if (response.status == 400) {
+                                        vm.isFormError = true;
+                                        var non_field_errors;
+                                        try {
+                                            non_field_errors = typeof(response.data.non_field_errors) !== 'undefined' ? true : false;
+                                            if (non_field_errors) {
+                                                vm.FormError = response.data.non_field_errors[0];
+                                            }
+                                        } catch (error) {
+                                            $rootScope.notify("error", error);
+                                        }
+                                    }
+                                    vm.stopLoader();
+                                }
+                            };
+                            utilities.sendRequest(loginParameters, "no-header");
+                        } 
                         vm.stopLoader();
                     },
                     onError: function(response) {
@@ -146,6 +186,38 @@
             }
         };
 
+        // Function to fetch and set refreshJWT 
+        vm.setRefreshJWT = function () {
+            var parameters = {};
+            parameters.url = 'accounts/user/get_auth_token';
+            parameters.method = 'GET';
+            parameters.token = utilities.getData('userKey');
+            parameters.callback = {
+                onSuccess: function (response) {
+                    if (response.status == 200) {
+                        utilities.storeData('refreshJWT', response.data.token);
+                    } else {
+                        alert("Could not fetch Auth Token");
+                    }
+                },
+                onError: function (response) {
+                    if (response.status == 400) {
+                        vm.isFormError = true;
+                        var non_field_errors;
+                        try {
+                            non_field_errors = typeof (response.data.non_field_errors) !== 'undefined' ? true : false;
+                            if (non_field_errors) {
+                                vm.FormError = response.data.non_field_errors[0];
+                            }
+                        } catch (error) {
+                            $rootScope.notify("error", error);
+                        }
+                    }
+                }
+            };
+            utilities.sendRequest(parameters, "header");
+        };
+
         // Function to login
         vm.userLogin = function(loginFormValid) {
             if (loginFormValid) {
@@ -162,6 +234,7 @@
                     onSuccess: function(response) {
                         if (response.status == 200) {
                             utilities.storeData('userKey', response.data.token);
+                            vm.setRefreshJWT();
                             if ($rootScope.previousState) {
                                 $state.go($rootScope.previousState);
                                 vm.stopLoader();
@@ -197,6 +270,12 @@
 
         // function to check password strength
         vm.checkStrength = function(password) {
+            if(password) {
+                vm.showPasswordStrength = true;
+            }
+            else {
+                vm.showPasswordStrength = false;
+            }
             var passwordStrength = utilities.passwordStrength(password);
             vm.message = passwordStrength[0];
             vm.color = passwordStrength[1];

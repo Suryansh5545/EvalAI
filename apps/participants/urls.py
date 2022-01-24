@@ -38,4 +38,16 @@ urlpatterns = [
         views.participant_team_detail,
         name="get_participant_team_details",
     ),
+    url(
+        r"^challenges/(?P<challenge_pk>[0-9]+)/team_details/$",
+        views.get_participant_team_details_for_challenge,
+        name="get_participant_team_details_for_challenge",
+    ),
+    url(
+        r"^challenges/(?P<challenge_pk>[0-9]+)/team/(?P<participant_team_pk>[0-9]+)/remove_participant_team/$",
+        views.remove_participant_team_from_challenge,
+        name="remove_participant_team_from_challenge",
+    ),
 ]
+
+app_name = "participants"

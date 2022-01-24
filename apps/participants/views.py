@@ -1,5 +1,7 @@
 from django.contrib.auth.models import User
 
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import permissions, status
 from rest_framework.decorators import (
     api_view,
@@ -12,18 +14,21 @@ from rest_framework_expiring_authtoken.authentication import (
     ExpiringTokenAuthentication,
 )
 from rest_framework.throttling import UserRateThrottle
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from accounts.permissions import HasVerifiedEmail
-from base.utils import paginated_queryset
-from challenges.models import Challenge
+from base.utils import team_paginated_queryset
+from challenges.models import Challenge, ChallengePhase
 from challenges.serializers import ChallengeSerializer
 from challenges.utils import (
     get_challenge_model,
+    get_participant_model,
     is_user_in_allowed_email_domains,
-    is_user_in_blocked_email_domains
+    is_user_in_blocked_email_domains,
 )
+from jobs.models import Submission
 from hosts.utils import is_user_a_host_of_challenge
-
+from .filters import ParticipantTeamsFilter
 from .models import Participant, ParticipantTeam
 from .serializers import (
     InviteParticipantToTeamSerializer,
@@ -36,14 +41,22 @@ from .serializers import (
 from .utils import (
     get_list_of_challenges_for_participant_team,
     get_list_of_challenges_participated_by_a_user,
+    get_participant_team_of_user_for_a_challenge,
+    has_user_participated_in_challenge,
     is_user_part_of_participant_team,
+    is_user_creator_of_participant_team,
 )
 
 
 @api_view(["GET", "POST"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes(
+    (
+        JWTAuthentication,
+        ExpiringTokenAuthentication,
+    )
+)
 def participant_team_list(request):
 
     if request.method == "GET":
@@ -53,7 +66,12 @@ def participant_team_list(request):
         participant_teams = ParticipantTeam.objects.filter(
             id__in=participant_teams_id
         ).order_by("-id")
-        paginator, result_page = paginated_queryset(participant_teams, request)
+        filtered_teams = ParticipantTeamsFilter(
+            request.GET, queryset=participant_teams
+        )
+        paginator, result_page = team_paginated_queryset(
+            filtered_teams.qs, request
+        )
         serializer = ParticipantTeamDetailSerializer(result_page, many=True)
         response_data = serializer.data
         return paginator.get_paginated_response(response_data)
@@ -79,7 +97,7 @@ def participant_team_list(request):
 @api_view(["GET"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def get_participant_team_challenge_list(request, participant_team_pk):
     """
     Returns a challenge list in which the participant team has participated.
@@ -94,7 +112,7 @@ def get_participant_team_challenge_list(request, participant_team_pk):
         challenge = Challenge.objects.filter(
             participant_teams=participant_team
         ).order_by("-id")
-        paginator, result_page = paginated_queryset(challenge, request)
+        paginator, result_page = team_paginated_queryset(challenge, request)
         serializer = ChallengeSerializer(
             result_page, many=True, context={"request": request}
         )
@@ -102,10 +120,10 @@ def get_participant_team_challenge_list(request, participant_team_pk):
         return paginator.get_paginated_response(response_data)
 
 
-@api_view(["GET", "PUT", "PATCH", "DELETE"])
+@api_view(["GET", "PUT", "PATCH"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def participant_team_detail(request, pk):
 
     try:
@@ -115,6 +133,14 @@ def participant_team_detail(request, pk):
         return Response(response_data, status=status.HTTP_406_NOT_ACCEPTABLE)
 
     if request.method == "GET":
+        if not is_user_part_of_participant_team(
+            request.user, participant_team
+        ):
+            response_data = {
+                "error": "Sorry, You are not authorized to view team details."
+            }
+            return Response(response_data, status=status.HTTP_403_FORBIDDEN)
+
         serializer = ParticipantTeamDetailSerializer(participant_team)
         response_data = serializer.data
         return Response(response_data, status=status.HTTP_200_OK)
@@ -122,6 +148,16 @@ def participant_team_detail(request, pk):
     elif request.method in ["PUT", "PATCH"]:
 
         if request.method == "PATCH":
+            if not is_user_creator_of_participant_team(
+                request.user, participant_team
+            ):
+                response_data = {
+                    "error": "You are not a authorized to change team details!"
+                }
+                return Response(
+                    response_data, status=status.HTTP_403_FORBIDDEN
+                )
+
             serializer = ParticipantTeamSerializer(
                 participant_team,
                 data=request.data,
@@ -139,19 +175,14 @@ def participant_team_detail(request, pk):
             response_data = serializer.data
             return Response(response_data, status=status.HTTP_200_OK)
         else:
-            return Response(
-                serializer.errors, status=status.HTTP_400_BAD_REQUEST
-            )
-
-    elif request.method == "DELETE":
-        participant_team.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+            errors = "\n".join(serializer.errors)
+            return Response(errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(["POST"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def invite_participant_to_team(request, pk):
     try:
         participant_team = ParticipantTeam.objects.get(pk=pk)
@@ -177,10 +208,10 @@ def invite_participant_to_team(request, pk):
         response_data = {"error": "User is already part of the team!"}
         return Response(response_data, status=status.HTTP_406_NOT_ACCEPTABLE)
 
-    invited_user_participated_challenges = get_list_of_challenges_participated_by_a_user(
-        user
-    ).values_list(
-        "id", flat=True
+    invited_user_participated_challenges = (
+        get_list_of_challenges_participated_by_a_user(user).values_list(
+            "id", flat=True
+        )
     )
     team_participated_challenges = get_list_of_challenges_for_participant_team(
         [participant_team]
@@ -208,13 +239,18 @@ def invite_participant_to_team(request, pk):
 
             if len(challenge.banned_email_ids) > 0:
                 # Check if team participants emails are banned
-                for participant_email in participant_team.get_all_participants_email():
+                for (
+                    participant_email
+                ) in participant_team.get_all_participants_email():
                     if participant_email in challenge.banned_email_ids:
                         message = "You cannot invite as you're a part of {} team and it has been banned "
                         "from this challenge. Please contact the challenge host."
-                        response_data = {"error": message.format(participant_team.team_name)}
+                        response_data = {
+                            "error": message.format(participant_team.team_name)
+                        }
                         return Response(
-                            response_data, status=status.HTTP_406_NOT_ACCEPTABLE
+                            response_data,
+                            status=status.HTTP_406_NOT_ACCEPTABLE,
                         )
 
                 # Check if invited user is banned
@@ -268,7 +304,7 @@ def invite_participant_to_team(request, pk):
 @api_view(["DELETE"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def delete_participant_from_team(request, participant_team_pk, participant_pk):
     """
     Deletes a participant from a Participant Team
@@ -309,7 +345,7 @@ def delete_participant_from_team(request, participant_team_pk, participant_pk):
 @api_view(["GET"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def get_teams_and_corresponding_challenges_for_a_participant(
     request, challenge_pk
 ):
@@ -354,7 +390,7 @@ def get_teams_and_corresponding_challenges_for_a_participant(
 @api_view(["DELETE"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def remove_self_from_participant_team(request, participant_team_pk):
     """
     A user can remove himself from the participant team.
@@ -386,3 +422,116 @@ def remove_self_from_participant_team(request, participant_team_pk):
         if participants.count() == 0:
             participant_team.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["GET"])
+@throttle_classes([UserRateThrottle])
+@permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
+def get_participant_team_details_for_challenge(request, challenge_pk):
+    """
+    API to get the participant team detail
+
+    Arguments:
+        request {HttpRequest} -- The request object
+        challenge_pk {[int]} -- Challenge primary key
+
+    Returns:
+        {dict} -- Participant team detail that has participated in the challenge
+    """
+
+    challenge = get_challenge_model(challenge_pk)
+    if has_user_participated_in_challenge(request.user, challenge_pk):
+        participant_team = get_participant_team_of_user_for_a_challenge(
+            request.user, challenge_pk
+        )
+        serializer = ParticipantTeamSerializer(participant_team)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    else:
+        response_data = {
+            "error": f"The user {request.user.username} has not participanted in {challenge.title}"
+        }
+        return Response(response_data, status=status.HTTP_404_NOT_FOUND)
+
+
+@swagger_auto_schema(
+    methods=["post"],
+    manual_parameters=[
+        openapi.Parameter(
+            name="challenge_pk",
+            in_=openapi.IN_PATH,
+            type=openapi.TYPE_NUMBER,
+            description="Challenge pk",
+            required=True,
+        ),
+        openapi.Parameter(
+            name="participant_team_pk",
+            in_=openapi.IN_PATH,
+            type=openapi.TYPE_NUMBER,
+            description="Participant team pk",
+            required=True,
+        ),
+    ],
+    operation_id="remove_participant_team_from_challenge",
+    responses={
+        status.HTTP_200_OK: openapi.Response(""),
+        status.HTTP_400_BAD_REQUEST: openapi.Response(
+            "{'error': 'Team has not participated in the challenge'}"
+        ),
+        status.HTTP_401_UNAUTHORIZED: openapi.Response(
+            "{'error': 'Sorry, you do not have permissions to remove this participant team'}"
+        )
+    },
+)
+@api_view(["POST"])
+@throttle_classes([UserRateThrottle])
+@permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
+def remove_participant_team_from_challenge(
+    request, challenge_pk, participant_team_pk
+):
+    """
+    API to remove the participant team from a challenge
+
+    Arguments:
+        request {HttpRequest} -- The request object
+        challenge_pk {[int]} -- Challenge primary key
+        participant_team_pk {[int]} -- Participant team primary key
+
+    Returns:
+        Response Object -- An object containing api response
+    """
+    challenge = get_challenge_model(challenge_pk)
+
+    participant_team = get_participant_model(participant_team_pk)
+
+    if participant_team.created_by == request.user:
+        if participant_team.challenge_set.filter(id=challenge_pk).exists():
+            challenge_phases = ChallengePhase.objects.filter(
+                challenge=challenge
+            )
+            for challenge_phase in challenge_phases:
+                submissions = Submission.objects.filter(
+                    participant_team=participant_team_pk,
+                    challenge_phase=challenge_phase,
+                )
+                if submissions.count() > 0:
+                    response_data = {
+                        "error": "Unable to remove team as you have already made submission to the challenge"
+                    }
+                    return Response(
+                        response_data, status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            challenge.participant_teams.remove(participant_team)
+            return Response(status=status.HTTP_200_OK)
+        else:
+            response_data = {
+                "error": "Team has not participated in the challenge"
+            }
+            return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+    else:
+        response_data = {
+            "error": "Sorry, you do not have permissions to remove this participant team"
+        }
+        return Response(response_data, status=status.HTTP_401_UNAUTHORIZED)

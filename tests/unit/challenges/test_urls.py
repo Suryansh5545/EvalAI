@@ -122,6 +122,17 @@ class TestChallengeUrls(BaseAPITestClass):
         )
 
         url = reverse_lazy(
+            "challenges:participant_team_detail_for_challenge",
+            kwargs={"challenge_pk": self.challenge.pk},
+        )
+        self.assertEqual(
+            url,
+            "/api/challenges/"
+            + str(self.challenge.pk)
+            + "/participant_team/team_detail",
+        )
+
+        url = reverse_lazy(
             "challenges:add_participant_team_to_challenge",
             kwargs={
                 "challenge_pk": self.challenge.pk,
@@ -287,20 +298,29 @@ class TestChallengeUrls(BaseAPITestClass):
             kwargs={"phase_pk": self.challenge_phase.pk},
         )
         self.assertEqual(
-            self.url, "/api/challenges/phases/{}/participant_team/aws/credentials/".format(self.challenge_phase.pk)
+            self.url,
+            "/api/challenges/phases/{}/participant_team/aws/credentials/".format(
+                self.challenge_phase.pk
+            ),
         )
         resolver = resolve(self.url)
-        self.assertEqual(resolver.view_name, "challenges:get_aws_credentials_for_participant_team")
+        self.assertEqual(
+            resolver.view_name,
+            "challenges:get_aws_credentials_for_participant_team",
+        )
         self.url = reverse_lazy(
-            'challenges:get_challenge_phase_by_pk',
-            kwargs={'pk': self.challenge_phase.pk},
+            "challenges:get_challenge_phase_by_pk",
+            kwargs={"pk": self.challenge_phase.pk},
         )
         self.assertEqual(
-            self.url, "/api/challenges/challenge/phase/{}/".format(self.challenge_phase.pk)
+            self.url,
+            "/api/challenges/challenge/phase/{}/".format(
+                self.challenge_phase.pk
+            ),
         )
 
         self.url = reverse_lazy(
-            'challenges:get_challenge_phases_by_challenge_pk',
+            "challenges:get_challenge_phases_by_challenge_pk",
             kwargs={"challenge_pk": self.challenge.pk},
         )
         self.assertEqual(

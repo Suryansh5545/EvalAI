@@ -17,6 +17,7 @@ from rest_framework_expiring_authtoken.authentication import (
     ExpiringTokenAuthentication,
 )
 from rest_framework.throttling import UserRateThrottle
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from accounts.permissions import HasVerifiedEmail
 from challenges.permissions import IsChallengeCreator
@@ -53,10 +54,10 @@ from .serializers import (
 @permission_classes(
     (permissions.IsAuthenticated, HasVerifiedEmail, IsChallengeCreator)
 )
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def get_participant_team_count(request, challenge_pk):
     """
-        Returns the number of participant teams in a challenge
+    Returns the number of participant teams in a challenge
     """
     challenge = get_challenge_model(challenge_pk)
     participant_team_count = challenge.participant_teams.count()
@@ -70,10 +71,10 @@ def get_participant_team_count(request, challenge_pk):
 @permission_classes(
     (permissions.IsAuthenticated, HasVerifiedEmail, IsChallengeCreator)
 )
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def get_participant_count(request, challenge_pk):
     """
-        Returns the number of participants in a challenge
+    Returns the number of participants in a challenge
     """
     challenge = get_challenge_model(challenge_pk)
     participant_teams = challenge.participant_teams.all()
@@ -90,11 +91,11 @@ def get_participant_count(request, challenge_pk):
 @permission_classes(
     (permissions.IsAuthenticated, HasVerifiedEmail, IsChallengeCreator)
 )
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def get_submission_count(request, challenge_pk, duration):
     """
-        Returns submission count for a challenge according to the duration
-        Valid values for duration are all, daily, weekly and monthly.
+    Returns submission count for a challenge according to the duration
+    Valid values for duration are all, daily, weekly and monthly.
     """
     # make sure that a valid url is requested.
     if duration.lower() not in ("all", "daily", "weekly", "monthly"):
@@ -139,7 +140,7 @@ def get_submission_count(request, challenge_pk, duration):
 @permission_classes(
     (permissions.IsAuthenticated, HasVerifiedEmail, IsChallengeCreator)
 )
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def get_challenge_phase_submission_count_by_team(
     request, challenge_pk, challenge_phase_pk
 ):
@@ -158,6 +159,7 @@ def get_challenge_phase_submission_count_by_team(
         challenge_phase=challenge_phase,
         challenge_phase__challenge=challenge,
         participant_team=participant_team,
+        ignore_submission=False,
     )
     participant_team_submissions = submissions.count()
 
@@ -180,12 +182,12 @@ def get_challenge_phase_submission_count_by_team(
 @permission_classes(
     (permissions.IsAuthenticated, HasVerifiedEmail, IsChallengeCreator)
 )
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def get_last_submission_time(
     request, challenge_pk, challenge_phase_pk, submission_by
 ):
     """
-        Returns the last submission time for a particular challenge phase
+    Returns the last submission time for a particular challenge phase
     """
     challenge = get_challenge_model(challenge_pk)
 
@@ -215,7 +217,7 @@ def get_last_submission_time(
 @permission_classes(
     (permissions.IsAuthenticated, HasVerifiedEmail, IsChallengeCreator)
 )
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def get_last_submission_datetime_analysis(
     request, challenge_pk, challenge_phase_pk
 ):
@@ -252,11 +254,9 @@ def get_last_submission_datetime_analysis(
             "You dont have any submissions in this challenge phase!"
         )
     else:
-        last_submission_timestamp_in_challenge_phase = submissions_in_a_phase.order_by(
-            "-submitted_at"
-        )[
-            0
-        ].created_at
+        last_submission_timestamp_in_challenge_phase = (
+            submissions_in_a_phase.order_by("-submitted_at")[0].created_at
+        )
 
     last_submission_timestamp = LastSubmissionTimestamp(
         last_submission_timestamp_in_challenge,
@@ -278,7 +278,7 @@ def get_last_submission_datetime_analysis(
 @api_view(["GET"])
 @throttle_classes([UserRateThrottle])
 @permission_classes((permissions.IsAuthenticated, HasVerifiedEmail))
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def get_challenge_phase_submission_analysis(
     request, challenge_pk, challenge_phase_pk
 ):
@@ -328,37 +328,35 @@ def get_challenge_phase_submission_analysis(
 @permission_classes(
     (permissions.IsAuthenticated, HasVerifiedEmail, IsChallengeCreator)
 )
-@authentication_classes((ExpiringTokenAuthentication,))
+@authentication_classes((JWTAuthentication, ExpiringTokenAuthentication))
 def download_all_participants(request, challenge_pk):
     """
-        Returns the List of Participant Teams and its details in csv format
+    Returns the List of Participant Teams and its details in csv format
     """
     if is_user_a_host_of_challenge(
-            user=request.user, challenge_pk=challenge_pk
+        user=request.user, challenge_pk=challenge_pk
     ):
         challenge = get_challenge_model(challenge_pk)
-        participant_teams = challenge.participant_teams.all().order_by("-team_name")
-        teams = ChallengeParticipantSerializer(participant_teams, many=True, context={"request": request})
-        response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = "attachment; filename=participant_teams_{0}.csv".format(challenge_pk)
-        writer = csv.writer(response)
-        writer.writerow(
-            [
-                "Team Name",
-                "Team Members",
-                "Email Id",
-            ]
+        participant_teams = challenge.participant_teams.all().order_by(
+            "-team_name"
         )
+        teams = ChallengeParticipantSerializer(
+            participant_teams, many=True, context={"request": request}
+        )
+        response = HttpResponse(content_type="text/csv")
+        response[
+            "Content-Disposition"
+        ] = "attachment; filename=participant_teams_{0}.csv".format(
+            challenge_pk
+        )
+        writer = csv.writer(response)
+        writer.writerow(["Team Name", "Team Members", "Email Id"])
         for team in teams.data:
             writer.writerow(
                 [
                     team["team_name"],
-                    ",".join(
-                        team["team_members"]
-                    ),
-                    ",".join(
-                        team["team_members_email_ids"]
-                    ),
+                    ",".join(team["team_members"]),
+                    ",".join(team["team_members_email_ids"]),
                 ]
             )
         return response

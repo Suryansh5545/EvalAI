@@ -7,9 +7,9 @@
         .module('evalai')
         .controller('ChangePwdCtrl', ChangePwdCtrl);
 
-    ChangePwdCtrl.$inject = ['utilities', '$state', '$http', '$rootScope'];
+    ChangePwdCtrl.$inject = ['utilities', '$state', '$rootScope'];
 
-    function ChangePwdCtrl(utilities, $state, $http, $rootScope) {
+    function ChangePwdCtrl(utilities, $state, $rootScope) {
         var vm = this;
         var userKey = utilities.getData('userKey');
         vm.wrnMsg = {};
@@ -22,7 +22,7 @@
         $rootScope.canShowNewPassword = false;
         $rootScope.canShowNewConfirmPassword = false;
 
-        vm.changepassContainer = angular.element('.change-passowrd-card');
+        vm.changepassContainer = angular.element('.change-password-card');
 
         vm.startLoader = function(msg) {
             $rootScope.isLoader = true;

@@ -29,7 +29,7 @@ def home(request, template_name="index.html"):
     return render(request, template_name)
 
 
-def page_not_found(request):
+def page_not_found(request, exception):
     response = render(request, "error404.html")
     response.status_code = 404
     return response
@@ -45,7 +45,7 @@ def notify_users_about_challenge(request):
     """
     Email New Challenge Details to EvalAI Users
     """
-    if request.user.is_authenticated() and request.user.is_superuser:
+    if request.user.is_authenticated and request.user.is_superuser:
         if request.method == "GET":
             template_name = "notification_email_data.html"
             return render(request, template_name)
@@ -101,8 +101,8 @@ def contact_us(request):
         user_does_not_exist = True
 
     if request.method == "POST" or user_does_not_exist:
-        if request.POST.get("message"):
-            request_data["message"] = request.POST.get("message")
+        if request.data.get("message"):
+            request_data["message"] = request.data.get("message")
         serializer = ContactSerializer(data=request_data)
         if serializer.is_valid():
             serializer.save()
@@ -117,19 +117,19 @@ def contact_us(request):
                         {
                             "title": "Name",
                             "value": request.data["name"],
-                            "short": True
+                            "short": True,
                         },
                         {
                             "title": "Email",
                             "value": request.data["email"],
-                            "short": True
+                            "short": True,
                         },
                         {
                             "title": "Message",
                             "value": request.data["message"],
-                            "short": False
-                        }
-                    ]
+                            "short": False,
+                        },
+                    ],
                 }
                 send_slack_notification(message=message)
             return Response(response_data, status=status.HTTP_201_CREATED)
@@ -144,15 +144,15 @@ def contact_us(request):
 @throttle_classes([AnonRateThrottle])
 @permission_classes((permissions.AllowAny,))
 def subscribe(request):
-    if request.method == 'GET':
+    if request.method == "GET":
         subscribers = Subscribers.objects.all().order_by("-pk")
         serializer = SubscribeSerializer(
             subscribers, many=True, context={"request": request}
         )
         response_data = serializer.data
         return Response(response_data, status=status.HTTP_200_OK)
-    elif request.method == 'POST':
-        email = request.data.get('email')
+    elif request.method == "POST":
+        email = request.data.get("email")
         # When user has already subscribed
         if Subscribers.objects.filter(email=email).exists():
             response_data = {
@@ -164,7 +164,10 @@ def subscribe(request):
         if serializer.is_valid():
             serializer.save()
             response_data = {
-                "message", "You will be notified about our latest updates at {}.".format(email)
+                "message",
+                "You will be notified about our latest updates at {}.".format(
+                    email
+                ),
             }
             return Response(response_data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

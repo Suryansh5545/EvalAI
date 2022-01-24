@@ -6,10 +6,14 @@
         .module('evalai')
         .controller('ChallengeCtrl', ChallengeCtrl);
 
-    ChallengeCtrl.$inject = ['utilities', 'loaderService', '$scope', '$state', '$http', '$stateParams', '$rootScope', 'Upload', '$interval', '$mdDialog', 'moment', '$location', '$anchorScroll', '$timeout'];
+    ChallengeCtrl.$inject = ['utilities', 'loaderService', '$scope', '$state', '$http', '$stateParams', '$rootScope', '$interval', '$mdDialog', 'moment', '$location', '$anchorScroll', '$timeout'];
 
-    function ChallengeCtrl(utilities, loaderService, $scope, $state, $http, $stateParams, $rootScope, Upload, $interval, $mdDialog, moment, $location, $anchorScroll, $timeout) {
+    function ChallengeCtrl(utilities, loaderService, $scope, $state, $http, $stateParams, $rootScope, $interval, $mdDialog, moment, $location, $anchorScroll, $timeout) {
         var vm = this;
+        vm.areSubmissionsFailing = false;
+        vm.getAllEntriesTestOption = "Include private submissions";
+        vm.showPrivateIds = [];
+        vm.showLeaderboardToggle = true;
         vm.challengeId = $stateParams.challengeId;
         vm.phaseId = null;
         vm.phaseSplitId = $stateParams.phaseSplitId;
@@ -19,12 +23,18 @@
         vm.methodDesc = "";
         vm.projectUrl = "";
         vm.publicationUrl = "";
+        vm.isPublicSubmission = null;
+        vm.isMultiMetricLeaderboardEnabled = {};
         vm.wrnMsg = {};
         vm.page = {};
         vm.isParticipated = false;
         vm.isActive = false;
         vm.phases = {};
         vm.phaseSplits = {};
+        vm.orderLeaderboardBy = decodeURIComponent($stateParams.metric);
+        vm.phaseSplitLeaderboardSchema = {};
+        vm.submissionMetaAttributes = []; // Stores the attributes format and phase ID for all the phases of a challenge.
+        vm.metaAttributesforCurrentSubmission = null; // Stores the attributes while making a submission for a selected phase.
         vm.selectedPhaseSplit = {};
         vm.phaseRemainingSubmissions = {};
         vm.phaseRemainingSubmissionsFlags = {};
@@ -32,6 +42,7 @@
         vm.isValid = {};
         vm.submissionVisibility = {};
         vm.baselineStatus = {};
+        vm.verifiedStatus = {};
         vm.showUpdate = false;
         vm.showLeaderboardUpdate = false;
         vm.poller = null;
@@ -41,19 +52,30 @@
         vm.stopFetchingSubmissions = function() {};
         vm.currentDate = null;
         vm.isPublished = false;
+        vm.approved_by_admin = false;
         vm.sortColumn = 'rank';
         vm.reverseSort = false;
         vm.columnIndexSort = 0;
         vm.disableSubmit = true;
         // save initial ranking
         vm.initial_ranking = {};
-      // loader for existing teams
+        // loader for existing teams
         vm.isExistLoader = false;
         vm.loaderTitle = '';
         vm.loaderContainer = angular.element('.exist-team-card');
         vm.termsAndConditions = false;
         vm.team = {};
         vm.isSubmissionUsingUrl = null;
+        vm.isSubmissionUsingCli = null;
+        vm.isSubmissionUsingFile = null;
+        vm.isRemoteChallenge = false;
+        vm.allowedSubmissionFileTypes = [];
+        vm.currentPhaseAllowedSubmissionFileTypes = '';
+        vm.defaultSubmissionMetaAttributes = [];
+        vm.currentSubmissionMetaData = null;
+        vm.currentPhaseMetaAttributesVisibility = {};
+        vm.phaseLeaderboardPublic = [];
+        vm.currentPhaseLeaderboardPublic = false;
 
         vm.filter_all_submission_by_team_name = '';
         vm.filter_my_submission_by_team_name = '';
@@ -65,7 +87,15 @@
         var userKey = utilities.getData('userKey');
         vm.authToken = userKey;
 
+        vm.refreshJWT = utilities.getData('refreshJWT');
+
         vm.subErrors = {};
+        vm.currentHighlightedLeaderboardEntry = null;
+
+        vm.isChallengeLeaderboardPrivate = false;
+        vm.previousPublicSubmissionId = null;
+
+        vm.workerLogs = [];
 
         utilities.showLoader();
 
@@ -82,19 +112,131 @@
             }, 500);
         };
 
-         // scroll to the specific entry of the leaderboard
-        vm.scrollToSpecificEntryLeaderboard = function (elementId) {
-            var newHash = elementId.toString();
-            if ($location.hash() !== newHash) {
-                $location.hash(elementId);
-            } else {
-                $anchorScroll();
+        // Function to fetch and set refreshJWT 
+        vm.fetchRefreshJWTToken = function () {
+            if (userKey) {
+                var parameters = {};
+                parameters.url = 'accounts/user/get_auth_token';
+                parameters.method = 'GET';
+                parameters.token = userKey;
+                parameters.callback = {
+                    onSuccess: function (response) {
+                        if (response.status == 200) {
+                            utilities.storeData('refreshJWT', response.data.token);
+                            vm.refreshJWT = utilities.getData('refreshJWT');
+                        } else {
+                            alert("Could not fetch Auth Token");
+                        }
+                    },
+                    onError: function (response) {
+                        if (response.status == 400) {
+                            vm.isFormError = true;
+                            var non_field_errors;
+                            try {
+                                non_field_errors = typeof (response.data.non_field_errors) !== 'undefined' ? true : false;
+                                if (non_field_errors) {
+                                    vm.FormError = response.data.non_field_errors[0];
+                                }
+                            } catch (error) {
+                                $rootScope.notify("error", error);
+                            }
+                        }
+                    }
+                };
+                utilities.sendRequest(parameters, "header");
             }
-            $scope.isHighlight = false;
-            $anchorScroll.yOffset = 90;
         };
 
-        vm.displayDockerSubmissionInstructions = function (isDockerBased, isParticipated) {
+        // check if the user is already logged in and jwt token is not set
+        if (typeof vm.refreshJWT != "string") {
+            vm.fetchRefreshJWTToken();
+        }
+
+        // API call to manage the worker from UI.
+        // Response data will be like: {action: "Success" or "Failure", error: <String to include only if action is Failure.>}
+        vm.manageWorker = function(action){
+            parameters.url = 'challenges/' + vm.challengeId + '/manage_worker/' + action +'/';
+            parameters.method = 'PUT';
+            parameters.data = {};
+            parameters.callback = {
+                onSuccess: function(response) {
+                    var details = response.data;
+                    if (details.action == "Success"){
+                        $rootScope.notify("success", "Worker(s) " + action + "ed succesfully.");
+                    }
+                    else {
+                        $rootScope.notify("error", details.error);
+                    }
+                },
+                onError: function(response) {
+                    var error = response.data.error;
+                    if (error == undefined){
+                        $rootScope.notify("error", "There was an error.");
+                    }
+                    else {
+                        $rootScope.notify("error", "There was an error: " + error);
+                    }
+                }
+            };
+            utilities.sendRequest(parameters);
+        };
+
+        // Get the logs from worker if submissions are failing.
+        vm.startLoadingLogs = function() {
+            vm.logs_poller = $interval(function(){
+                parameters.url = 'challenges/' + vm.challengeId + '/get_worker_logs/';
+                parameters.method = 'GET';
+                parameters.data = {};
+                parameters.callback = {
+                    onSuccess: function(response) {
+                        var details = response.data;
+                        vm.workerLogs = [];
+                        for (var i = 0; i<details.logs.length; i++){
+                            vm.workerLogs.push(details.logs[i]);
+                        }
+                    },
+                    onError: function(response) {
+                        var error = response.data.error;
+                        vm.workerLogs.push(error);
+                    }
+                };
+                utilities.sendRequest(parameters);
+            }, 5000);
+        };
+
+        vm.stopLoadingLogs = function(){
+            $interval.cancel(vm.logs_poller);
+        };
+
+         // highlight the specific entry of the leaderboard
+        vm.highlightSpecificLeaderboardEntry = function (key) {
+            key = '#' + key;
+            // Remove highlight from previous clicked entry
+            if (vm.currentHighlightedLeaderboardEntry != null) {
+                let prevEntry = angular.element(vm.currentHighlightedLeaderboardEntry)[0];
+                prevEntry.setAttribute("class", "");
+            }
+            let entry = angular.element(key)[0];
+            entry.setAttribute("class", "highlightLeaderboard");
+            vm.currentHighlightedLeaderboardEntry = key;
+            $scope.isHighlight = false;
+        };
+
+        // get names of the team that has participated in the current challenge
+        vm.getTeamName = function(challengeId) {
+            parameters.url = 'challenges/' + challengeId + '/participant_team/team_detail';
+            parameters.method = 'GET';
+            parameters.data={};
+            parameters.callback = {
+                onSuccess: function(response) {
+                     var details = response.data;
+                    vm.participated_team_name = details["team_name"];
+                },
+            };
+            utilities.sendRequest(parameters);
+        };
+
+            vm.displayDockerSubmissionInstructions = function (isDockerBased, isParticipated) {
             // get remaining submission for docker based challenge
             if (isDockerBased && isParticipated == true) {
                 parameters.url = 'jobs/' + vm.challengeId + '/remaining_submissions/';
@@ -172,6 +314,9 @@
                 vm.forumURL = details.forum_url;
                 vm.cliVersion = details.cli_version;
                 vm.isRegistrationOpen = details.is_registration_open;
+                vm.approved_by_admin = details.approved_by_admin;
+                vm.isRemoteChallenge = details.remote_evaluation;
+                vm.getTeamName(vm.challengeId);
 
                 if (vm.page.image === null) {
                     vm.page.image = "dist/images/logo.png";
@@ -251,7 +396,7 @@
                                             // select team from existing list
                                             vm.selectExistTeam = function() {
 
-                                                // loader for exisiting teams
+                                                // loader for existing teams
                                                 vm.isExistLoader = true;
                                                 vm.loaderTitle = '';
                                                 vm.loaderContainer = angular.element('.exist-team-card');
@@ -267,6 +412,7 @@
                                                         vm.isParticipated = true;
                                                         $state.go('web.challenge-main.challenge-page.submission');
                                                         vm.displayDockerSubmissionInstructions(vm.page.is_docker_based, vm.isParticipated);
+                                                        vm.getTeamName(vm.challengeId);
                                                         vm.stopLoader();
                                                     },
                                                     onError: function(response) {
@@ -284,7 +430,7 @@
 
                                             // to load data with pagination
                                             vm.load = function(url) {
-                                                // loader for exisiting teams
+                                                // loader for existing teams
                                                 vm.isExistLoader = true;
                                                 vm.loaderTitle = '';
                                                 vm.loaderContainer = angular.element('.exist-team-card');
@@ -363,13 +509,16 @@
         vm.toggleParticipation = function (ev, isRegistrationOpen) {
             // ev.stopPropagation();
             var participationState;
+            var participationModalText;
             if (isRegistrationOpen) {
-                participationState = 'Close';
+                participationState = 'closed';
+                participationModalText = 'Close participation in the challenge?';
             } else {
-                participationState = 'Open';
+                participationState = 'opened';
+                participationModalText = 'Open participation in the challenge?';
             }
             var confirm = $mdDialog.confirm()
-                          .title(participationState + ' participation in the challenge?')
+                          .title(participationModalText)
                           .ariaLabel('')
                           .targetEvent(ev)
                           .ok('Yes, I\'m sure')
@@ -391,7 +540,7 @@
                 parameters.callback = {
                     onSuccess: function() {
                         vm.isRegistrationOpen = !vm.isRegistrationOpen;
-                        $rootScope.notify('success', 'Participation is ' + participationState + 'ed successfully');
+                        $rootScope.notify('success', 'Participation is ' + participationState + ' successfully');
                     },
                     onError: function(response) {
                         var details = response.data;
@@ -408,6 +557,10 @@
                 if ((fileVal === null || fileVal === "") && (vm.fileUrl === null || vm.fileUrl === "")) {
                     vm.subErrors.msg = "Please upload file or enter submission URL!";
                 } else {
+                    if (vm.isCurrentSubmissionMetaAttributeValid() !== true) {
+                        vm.subErrors.msg = "Please provide input for meta attributes!";
+                        return false;
+                    }
                     vm.isExistLoader = true;
                     vm.loaderTitle = '';
                     vm.loaderContainer = angular.element('.exist-team-card');
@@ -422,14 +575,14 @@
                     var formData = new FormData();
                     if (vm.isSubmissionUsingUrl) {
                         var urlRegex = /(ftp|http|https):\/\/(\w+:{0,1}\w*@)?(\S+)(:[0-9]+)?(\/|\/([\w#!:.?+=&%@!\-/]))?/;
-                        var validExtensions = ["json", "zip", "csv"];
+                        var validExtensions = vm.currentPhaseAllowedSubmissionFileTypes;
                         var isUrlValid = urlRegex.test(vm.fileUrl);
                         var extension = vm.fileUrl.split(".").pop();
                         if (isUrlValid && validExtensions.includes(extension)) {
                             formData.append("file_url", vm.fileUrl);
                         } else {
                             vm.stopLoader();
-                            vm.subErrors.msg = "Please enter a valid URL which ends in json, zip or csv file extension!";
+                            vm.subErrors.msg = "Please enter a valid URL which ends in " + validExtensions + " file extension!";
                             return false;
                         }
                     } else {
@@ -440,6 +593,10 @@
                     formData.append("method_description", vm.methodDesc);
                     formData.append("project_url", vm.projectUrl);
                     formData.append("publication_url", vm.publicationUrl);
+                    formData.append("submission_metadata", JSON.stringify(vm.metaAttributesforCurrentSubmission));
+                    if (vm.isPublicSubmission !== null) {
+                        formData.append("is_public", vm.isPublicSubmission);
+                    }
 
                     parameters.data = formData;
 
@@ -465,9 +622,11 @@
                             vm.methodDesc = "";
                             vm.projectUrl = "";
                             vm.publicationUrl = "";
+                            vm.isPublicSubmission = null;
                             $rootScope.notify("success", "Your submission has been recorded succesfully!");
                             vm.disableSubmit = true;
                             vm.showSubmissionNumbers = false;
+                            vm.metaAttributesforCurrentSubmission = null;
                             vm.stopLoader();
                         },
                         onError: function(response) {
@@ -480,6 +639,7 @@
                             vm.methodDesc = null;
                             vm.projectUrl = null;
                             vm.publicationUrl = null;
+                            vm.isPublicSubmission = null;
                             if (status == 404) {
                                 vm.subErrors.msg = "Please select phase!";
                             } else {
@@ -496,8 +656,6 @@
                 }
             }
         };
-
-
 
         // get details of the particular challenge phase
         parameters.url = 'challenges/challenge/' + vm.challengeId + '/challenge_phase';
@@ -519,9 +677,55 @@
                     offset = new Date(vm.phases.results[j].end_date).getTimezoneOffset();
                     vm.phases.results[j].end_zone = moment.tz.zone(timezone).abbr(offset);
                 }
-                
-                // navigate to challenge page
-                // $state.go('web.challenge-page.overview');
+
+                for(var k=0; k<details.count; k++){
+                    if (details.results[k].submission_meta_attributes != undefined || details.results[k].submission_meta_attributes != null){
+                        var attributes = details.results[k].submission_meta_attributes;
+                        attributes.forEach(function(attribute){
+                            if (attribute["type"] == "checkbox") {
+                                attribute["values"] = [];
+                            }
+                            else {
+                                attribute["value"] = null;
+                            }
+                        });
+                        data = {"phaseId":details.results[k].id, "attributes": attributes};
+                        vm.submissionMetaAttributes.push(data);
+                    }
+                    else {
+                        var data = {"phaseId":details.results[k].id, "attributes": null};
+                        vm.submissionMetaAttributes.push(data);
+                    }
+                    if (details.results[k].allowed_submission_file_types != undefined || details.results[k].allowed_submission_file_types != null) {
+                        vm.allowedSubmissionFileTypes.push({
+                            "phaseId": details.results[k].id,
+                            "allowedSubmissionFileTypes": details.results[k].allowed_submission_file_types
+                        });
+                    } else {
+                        // Handle case for missing values
+                        vm.allowedSubmissionFileTypes.push({
+                            "phaseId": details.results[k].id,
+                            "allowedSubmissionFileTypes": ".json, .zip, .txt, .tsv, .gz, .csv, .h5, .npy"
+                        });
+                    }
+                    if (details.results[k].default_submission_meta_attributes != undefined && details.results[k].default_submission_meta_attributes != null) {
+                        var meta_attributes = details.results[k].default_submission_meta_attributes;
+                        var defaultMetaAttributes = vm.getDefaultMetaAttributesDict(meta_attributes);
+                        vm.defaultSubmissionMetaAttributes.push({
+                            "phaseId": details.results[k].id,
+                            "defaultAttributes": defaultMetaAttributes
+                        });
+                    } else {
+                        vm.defaultSubmissionMetaAttributes.push({
+                            "phaseId":details.results[k].id,
+                            "defaultAttributes": {}
+                        });
+                    }
+                    vm.phaseLeaderboardPublic.push({
+                        "phaseId": details.results[k].id,
+                        "leaderboardPublic": details.results[k].leaderboard_public
+                    });
+                }
                 utilities.hideLoader();
             },
             onError: function(response) {
@@ -534,11 +738,84 @@
 
         utilities.sendRequest(parameters);
 
+        vm.loadPhaseAttributes = function(phaseId){ // Loads attributes of a phase into vm.submissionMetaAttributes
+            vm.metaAttributesforCurrentSubmission = vm.submissionMetaAttributes.find(function(element){
+                return element["phaseId"] == phaseId;
+            }).attributes;
+            vm.currentPhaseAllowedSubmissionFileTypes = vm.allowedSubmissionFileTypes.find(function(element) {
+                return element["phaseId"] == phaseId;
+            }).allowedSubmissionFileTypes;
+            // load default meta attributes visibility for current phase
+            vm.currentPhaseMetaAttributesVisibility = vm.defaultSubmissionMetaAttributes.find(function(element) {
+                return element["phaseId"] == phaseId;
+            }).defaultAttributes;
+            vm.currentPhaseLeaderboardPublic = vm.phaseLeaderboardPublic.find(function(element) {
+                return element["phaseId"] == phaseId;
+            }).leaderboardPublic;
+            vm.subErrors.msg = "";
+        };
+
+        vm.getDefaultMetaAttributesDict = function(defaultMetaAttributes) {
+            var defaultMetaAttributesDict = {};
+            if (defaultMetaAttributes != undefined && defaultMetaAttributes != null) {
+                defaultMetaAttributes.forEach(function(attribute) {
+                    var attributeName = attribute["name"];
+                    var is_visible = attribute["is_visible"];
+                    defaultMetaAttributesDict[attributeName] = is_visible;
+                });
+            }
+            return defaultMetaAttributesDict;
+        };
+
+        vm.clearMetaAttributeValues = function(){
+            if (vm.metaAttributesforCurrentSubmission != null){
+                vm.metaAttributesforCurrentSubmission.forEach(function(attribute){
+                    if (attribute.type == 'checkbox'){
+                        attribute.values = [];
+                    }
+                    else {
+                        attribute.value = null;
+                    }
+                });
+            }
+        };
+
+        vm.isCurrentSubmissionMetaAttributeValid = function() {
+            var isMetaAttributeValid = true;
+            if (vm.metaAttributesforCurrentSubmission !== null) {
+                vm.metaAttributesforCurrentSubmission.forEach(function(attribute) {
+                    if (attribute.required == true) {
+                        if (attribute.type == "checkbox") {
+                            if (attribute.values.length === 0) {
+                                isMetaAttributeValid = false;
+                            }
+                        } else {
+                            if (attribute.value === null || attribute.value === undefined) {
+                                isMetaAttributeValid = false;
+                            }
+                        }
+                    }
+                });
+            }
+            return isMetaAttributeValid;
+        };
+
+        vm.toggleSelection = function toggleSelection(attribute, value){ // Make sure this modifies the reference object.
+                var idx = attribute.values.indexOf(value);
+                if (idx > -1) {
+                  attribute.values.splice(idx, 1);
+                }
+                else {
+                  attribute.values.push(value);
+                }
+            };
+
         var challengePhaseVisibility = {
             owner_and_host: 1,
             host: 2,
             public: 3,
         };
+
         // get details of the particular challenge phase split
         parameters.url = 'challenges/' + vm.challengeId + '/challenge_phase_split';
         parameters.method = 'GET';
@@ -547,10 +824,16 @@
             onSuccess: function(response) {
                 var details = response.data;
                 vm.phaseSplits = details;
+                if (details.length == 0) {
+                    vm.isChallengeLeaderboardPrivate = true; 
+                }
                 for(var i=0; i<details.length; i++) {
                     if (details[i].visibility !== challengePhaseVisibility.public) {
                         vm.phaseSplits[i].showPrivate = true;
+                        vm.showPrivateIds.push(vm.phaseSplits[i].id);
                     }
+                    vm.isMultiMetricLeaderboardEnabled[vm.phaseSplits[i].id] = vm.phaseSplits[i].is_multi_metric_leaderboard;
+                    vm.phaseSplitLeaderboardSchema[vm.phaseSplits[i].id] = vm.phaseSplits[i].leaderboard_schema;
                 }
                 utilities.hideLoader();
             },
@@ -582,7 +865,9 @@
                 // sort teams alphabetically
                 return key.submission__participant_team__team_name;
             }
-
+            else if (vm.sortColumn == 'exec'){
+                return key.submission__execution_time;
+            }
             return 0;
         };
 
@@ -596,15 +881,40 @@
             scope.sortColumn = column;
         };
 
+        vm.isMetricOrderedAscending = function(metric) {
+            let schema = vm.leaderboard[0].leaderboard__schema;
+            let metadata = schema.metadata;
+            if (metadata != null && metadata != undefined) {
+                // By default all metrics are considered higher is better
+                if (metadata[metric] == undefined) {
+                    return false;
+                }
+                return metadata[metric].sort_ascending;
+            }
+            return false;
+        };
+
+        vm.getLabelDescription = function(metric) {
+            let schema = vm.leaderboard[0].leaderboard__schema;
+            let metadata = schema.metadata;
+            if (metadata != null && metadata != undefined) {
+                // By default all metrics are considered higher is better
+                if (metadata[metric] == undefined || metadata[metric].description == undefined) {
+                    return "";
+                }
+                return metadata[metric].description;
+            }
+            return "";
+        };
+
         // my submissions
         vm.isResult = false;
 
         vm.startLeaderboard = function() {
             vm.stopLeaderboard();
             vm.poller = $interval(function() {
-                parameters.url = "jobs/" + "challenge_phase_split/" + vm.phaseSplitId + "/leaderboard/?page_size=1000";
+                parameters.url = "jobs/" + "challenge_phase_split/" + vm.phaseSplitId + "/leaderboard/?page_size=1000&order_by=" + vm.orderLeaderboardBy;
                 parameters.method = 'GET';
-                parameters.data = {};
                 parameters.callback = {
                     onSuccess: function(response) {
                         var details = response.data;
@@ -632,7 +942,7 @@
 
             vm.isResult = true;
             vm.phaseSplitId = phaseSplitId;
-            // loader for exisiting teams
+            // loader for existing teams
             vm.isExistLoader = true;
             vm.loaderTitle = '';
             vm.loaderContainer = angular.element('.exist-team-card');
@@ -660,14 +970,26 @@
 
             // Show leaderboard
             vm.leaderboard = {};
-            parameters.url = "jobs/" + "challenge_phase_split/" + vm.phaseSplitId + "/leaderboard/?page_size=1000";
+            parameters.url = "jobs/" + "challenge_phase_split/" + vm.phaseSplitId + "/leaderboard/?page_size=1000&order_by=" + vm.orderLeaderboardBy;
             parameters.method = 'GET';
-            parameters.data = {};
             parameters.callback = {
                 onSuccess: function(response) {
                     var details = response.data;
                     vm.leaderboard = details.results;
+                    for (var j=0; j<vm.showPrivateIds.length; j++) {
+                        if (vm.showPrivateIds[j] == vm.phaseSplitId) {
+                            vm.showLeaderboardToggle = false;
+                            break;
+                        }
+                    }
                     for (var i=0; i<vm.leaderboard.length; i++) {
+                        if (vm.leaderboard[i].submission__submission_metadata == null){
+                            vm.showSubmissionMetaAttributesOnLeaderboard = false;
+                        }
+                        else {
+                            vm.showSubmissionMetaAttributesOnLeaderboard = true;
+                        }
+
                         vm.leaderboard[i]['submission__submitted_at_formatted'] = vm.leaderboard[i]['submission__submitted_at'];
                         vm.initial_ranking[vm.leaderboard[i].id] = i+1;
                         var dateTimeNow = moment(new Date());
@@ -707,8 +1029,8 @@
                                 vm.leaderboard[i].timeSpan = 'hour';
                             } else {
                                 vm.leaderboard[i].timeSpan = 'hours';
-                            }                        
-                        } 
+                            }
+                        }
                         else if (duration._data.minutes !=0) {
                             var minutes = duration.asMinutes();
                             vm.leaderboard[i].submission__submitted_at = minutes;
@@ -747,6 +1069,32 @@
             vm.getLeaderboard(vm.phaseSplitId);
         }
 
+        
+        vm.showMetaAttributesDialog = function(ev, attributes){
+            if (attributes != false){
+                vm.metaAttributesData = [];
+                attributes.forEach(function(attribute){
+                    if (attribute.type != "checkbox") {
+                        vm.metaAttributesData.push({"name": attribute.name, "value": attribute.value});
+                    }
+                    else {
+                        vm.metaAttributesData.push({"name": attribute.name, "values": attribute.values});
+                    }
+                });
+
+                $mdDialog.show({
+                    scope: $scope,
+                    preserveScope: true,
+                    targetEvent: ev,
+                    templateUrl: 'src/views/web/challenge/submission-meta-attributes-dialog.html',
+                    clickOutsideToClose: true
+                });
+            }
+            else {
+                $mdDialog.hide();
+            }
+        };
+
         vm.getResults = function(phaseId) {
             // long polling (5s) for leaderboard
             vm.start = function() {
@@ -763,6 +1111,7 @@
                             for (var i = 0; i < details.results.length; i++) {
                                 vm.submissionVisibility[details.results[i].id] = details.results[i].is_public;
                                 vm.baselineStatus[details.results[i].id] = details.results[i].is_baseline;
+                                vm.verifiedStatus[details.results[i].id] = details.results[i].is_verified_by_host;
                             }
 
                             if (vm.submissionResult.results.length !== details.results.length) {
@@ -801,6 +1150,11 @@
             for (var i = 0; i < vm.phases.results.length; i++) {
                 if (all_phases[i].id == phaseId) {
                     vm.currentPhaseLeaderboardPublic = all_phases[i].leaderboard_public;
+                    vm.isCurrentPhaseRestrictedToSelectOneSubmission = all_phases[i].is_restricted_to_select_one_submission;
+
+                    var attributes = all_phases[i].default_submission_meta_attributes;
+                    var defaultMetaAttributes = vm.getDefaultMetaAttributesDict(attributes);
+                    vm.currentPhaseMetaAttributesVisibility = defaultMetaAttributes;
                     break;
                 }
             }
@@ -820,7 +1174,7 @@
             };
             utilities.sendRequest(parameters);
 
-            // loader for exisiting teams
+            // loader for existing teams
             vm.isExistLoader = true;
             vm.loaderTitle = '';
             vm.loaderContainer = angular.element('.exist-team-card');
@@ -849,6 +1203,11 @@
                     for (var i = 0; i < details.results.length; i++) {
                         vm.submissionVisibility[details.results[i].id] = details.results[i].is_public;
                         vm.baselineStatus[details.results[i].id] = details.results[i].is_baseline;
+                        vm.verifiedStatus[details.results[i].id] = details.results[i].is_verified_by_host;
+                        // Set previous public submission id for phases with one public submission restriction
+                        if (details.results[i].is_public) {
+                            vm.previousPublicSubmissionId = details.results[i].id;
+                        }
                     }
 
                     vm.submissionResult = details;
@@ -877,12 +1236,14 @@
                     }
                     if (vm.submissionResult.next !== null) {
                         vm.currentPage = vm.submissionResult.next.split('page=')[1] - 1;
+                        vm.currentRefPage = Math.ceil(vm.currentPage);
                     } else {
                         vm.currentPage = 1;
+                        vm.currentRefPage = Math.ceil(vm.currentPage);
                     }
 
                     vm.load = function(url) {
-                        // loader for exisiting teams
+                        // loader for existing teams
                         vm.isExistLoader = true;
                         vm.loaderTitle = '';
                         vm.loaderContainer = angular.element('.exist-team-card');
@@ -905,9 +1266,11 @@
                                 if (vm.submissionResult.next === null) {
                                     vm.isNext = 'disabled';
                                     vm.currentPage = vm.submissionResult.count / 100;
+                                    vm.currentRefPage = Math.ceil(vm.currentPage);
                                 } else {
                                     vm.isNext = '';
                                     vm.currentPage = parseInt(vm.submissionResult.next.split('page=')[1] - 1);
+                                    vm.currentRefPage = Math.ceil(vm.currentPage);
                                 }
 
                                 if (vm.submissionResult.previous === null) {
@@ -943,6 +1306,7 @@
                 vm.isNext = '';
                 vm.isPrev = '';
                 vm.currentPage = '';
+                vm.currentRefPage = '';
                 vm.showPagination = false;
             }
 
@@ -979,8 +1343,10 @@
                     }
                     if (vm.submissionResult.next !== null) {
                         vm.currentPage = vm.submissionResult.next.split('page=')[1] - 1;
+                        vm.currentRefPage = Math.ceil(vm.currentPage);
                     } else {
                         vm.currentPage = 1;
+                        vm.currentRefPage = Math.ceil(vm.currentPage);
                     }
 
 
@@ -988,6 +1354,7 @@
                     for (var i = 0; i < details.results.length; i++) {
                         vm.submissionVisibility[details.results[i].id] = details.results[i].is_public;
                         vm.baselineStatus[details.results[i].id] = details.results[i].is_baseline;
+                        vm.verifiedStatus[details.results[i].id] = details.results[i].is_verified_by_host;
                     }
 
                     vm.submissionResult = details;
@@ -1004,7 +1371,7 @@
 
         vm.reRunSubmission = function(submissionObject) {
             submissionObject.classList = ['spin', 'progress-indicator'];
-            parameters.url = 'jobs/submissions/' + submissionObject.id + '/re-run/';
+            parameters.url = 'jobs/submissions/' + submissionObject.id + '/re-run-by-host/';
             parameters.method = 'POST';
             parameters.token = userKey;
             parameters.callback = {
@@ -1024,9 +1391,8 @@
         vm.refreshLeaderboard = function() {
             vm.startLoader("Loading Leaderboard Items");
             vm.leaderboard = {};
-            parameters.url = "jobs/" + "challenge_phase_split/" + vm.phaseSplitId + "/leaderboard/?page_size=1000";
+            parameters.url = "jobs/" + "challenge_phase_split/" + vm.phaseSplitId + "/leaderboard/?page_size=1000&order_by=" + vm.orderLeaderboardBy;
             parameters.method = 'GET';
-            parameters.data = {};
             parameters.callback = {
                 onSuccess: function(response) {
                     var details = response.data;
@@ -1065,6 +1431,123 @@
                 }
             };
             utilities.sendRequest(parameters);
+        };
+
+        // function for getting all submissions on leaderboard public/private
+        vm.getAllEntriesOnPublicLeaderboard = function(phaseSplitId) {
+            vm.stopLeaderboard = function() {
+                $interval.cancel(vm.poller);
+            };
+            vm.stopLeaderboard();
+
+            vm.isResult = true;
+            vm.phaseSplitId = phaseSplitId;
+            // loader for exisiting teams
+            vm.isExistLoader = true;
+            vm.loaderTitle = '';
+            vm.loaderContainer = angular.element('.exist-team-card');
+
+            vm.startLoader("Loading Leaderboard Items");
+
+            // Show leaderboard
+            vm.leaderboard = {};
+            parameters.url = "jobs/" + "phase_split/" + vm.phaseSplitId + "/public_leaderboard_all_entries/?page_size=1000&order_by=" + vm.orderLeaderboardBy;
+            parameters.method = 'GET';
+            parameters.callback = {
+                onSuccess: function(response) {
+                    var details = response.data;
+                    vm.leaderboard = details.results;
+
+                    // setting last_submission time
+                    for (var i = 0; i < vm.leaderboard.length; i++) {
+                        vm.leaderboard[i]['submission__submitted_at_formatted'] = vm.leaderboard[i]['submission__submitted_at'];
+                        vm.initial_ranking[vm.leaderboard[i].id] = i + 1;
+                        var dateTimeNow = moment(new Date());
+                        var submissionTime = moment(vm.leaderboard[i].submission__submitted_at);
+                        var duration = moment.duration(dateTimeNow.diff(submissionTime));
+                        if (duration._data.years != 0) {
+                            var years = duration.asYears();
+                            vm.leaderboard[i].submission__submitted_at = years;
+                            if (years.toFixed(0) == 1) {
+                                vm.leaderboard[i].timeSpan = 'year';
+                            } else {
+                                vm.leaderboard[i].timeSpan = 'years';
+                            }
+                        } else if (duration._data.months != 0) {
+                            var months = duration.months();
+                            vm.leaderboard[i].submission__submitted_at = months;
+                            if (months.toFixed(0) == 1) {
+                                vm.leaderboard[i].timeSpan = 'month';
+                            } else {
+                                vm.leaderboard[i].timeSpan = 'months';
+                            }
+                        } else if (duration._data.days != 0) {
+                            var days = duration.asDays();
+                            vm.leaderboard[i].submission__submitted_at = days;
+                            if (days.toFixed(0) == 1) {
+                                vm.leaderboard[i].timeSpan = 'day';
+                            } else {
+                                vm.leaderboard[i].timeSpan = 'days';
+                            }
+                        } else if (duration._data.hours != 0) {
+                            var hours = duration.asHours();
+                            vm.leaderboard[i].submission__submitted_at = hours;
+                            if (hours.toFixed(0) == 1) {
+                                vm.leaderboard[i].timeSpan = 'hour';
+                            } else {
+                                vm.leaderboard[i].timeSpan = 'hours';
+                            }
+                        } else if (duration._data.minutes != 0) {
+                            var minutes = duration.asMinutes();
+                            vm.leaderboard[i].submission__submitted_at = minutes;
+                            if (minutes.toFixed(0) == 1) {
+                                vm.leaderboard[i].timeSpan = 'minute';
+                            } else {
+                                vm.leaderboard[i].timeSpan = 'minutes';
+                            }
+                        } else if (duration._data.seconds != 0) {
+                            var second = duration.asSeconds();
+                            vm.leaderboard[i].submission__submitted_at = second;
+                            if (second.toFixed(0) == 1) {
+                                vm.leaderboard[i].timeSpan = 'second';
+                            } else {
+                                vm.leaderboard[i].timeSpan = 'seconds';
+                            }
+                        }
+                    }
+                    vm.phaseName = vm.phaseSplitId;
+                    vm.startLeaderboard();
+                    vm.stopLoader();
+                    vm.scrollToEntryAfterLeaderboardLoads();
+                },
+                onError: function(response) {
+                    var error = response.data;
+                    vm.leaderboard.error = error;
+                    vm.stopLoader();
+                }
+            };
+
+            utilities.sendRequest(parameters);
+        };
+
+        if (vm.phaseSplitId) {
+            vm.getLeaderboard(vm.phaseSplitId);
+        }
+        vm.getAllEntries = false;
+
+        // function for toggeling between public leaderboard and complete leaderboard [public/private]
+        vm.toggleLeaderboard = function(getAllEntries){
+            vm.getAllEntries = getAllEntries;
+            if (vm.phaseSplitId) {
+                if (vm.getAllEntries){
+                    vm.getAllEntriesTestOption = "Exclude private submissions";
+                    vm.getAllEntriesOnPublicLeaderboard(vm.phaseSplitId);
+                }
+                else {
+                    vm.getAllEntriesTestOption = "Include private submissions";
+                    vm.getLeaderboard(vm.phaseSplitId);
+                }
+            }
         };
 
         // function to create new team for participating in challenge
@@ -1171,11 +1654,17 @@
                     var details = response.data;
                     vm.submissionResult = details;
 
+                    if (Array.isArray(vm.submissionResult.results)) {
+                        for (var i = 0; i < details.results.length; i++) {
+                            vm.submissionVisibility[details.results[i].id] = details.results[i].is_public;
+                            vm.verifiedStatus[details.results[i].id] = details.results[i].is_verified_by_host;
+                        }
+                    }
+
                     if (vm.submissionResult.count === 0) {
                         vm.showPagination = false;
                         vm.paginationMsg = "No results found";
                     } else {
-
                         vm.showPagination = true;
                         vm.paginationMsg = "";
                     }
@@ -1193,8 +1682,10 @@
                     }
                     if (vm.submissionResult.next !== null) {
                         vm.currentPage = vm.submissionResult.next.split('page=')[1] - 1;
+                        vm.currentRefPage = Math.ceil(vm.currentPage);
                     } else {
                         vm.currentPage = 1;
+                        vm.currentRefPage = Math.ceil(vm.currentPage);
                     }
 
                     vm.load = function(url) {
@@ -1218,9 +1709,11 @@
                                 if (vm.submissionResult.next === null) {
                                     vm.isNext = 'disabled';
                                     vm.currentPage = vm.submissionResult.count / 100;
+                                    vm.currentRefPage = Math.ceil(vm.currentPage);
                                 } else {
                                     vm.isNext = '';
                                     vm.currentPage = parseInt(vm.submissionResult.next.split('page=')[1] - 1);
+                                    vm.currentRefPage = Math.ceil(vm.currentPage);
                                 }
 
                                 if (vm.submissionResult.previous === null) {
@@ -1246,17 +1739,17 @@
             utilities.sendRequest(parameters);
         };
 
-        vm.changeSubmissionVisibility = function(submission_id) {
+        vm.changeSubmissionVisibility = function(submission_id, submissionVisibility) {
             parameters.url = "jobs/challenge/" + vm.challengeId + "/challenge_phase/" + vm.phaseId + "/submission/" + submission_id;
             parameters.method = 'PATCH';
             parameters.data = {
-                "is_public": vm.submissionVisibility[submission_id]
+                "is_public": submissionVisibility
             };
             parameters.callback = {
                 onSuccess: function(response) {
                     var status = response.status;
                     var message = "";
-                    if(status === 200) {
+                    if (status === 200) {
                       var detail = response.data;
                       if (detail['is_public'] == true) {
                         message = "The submission is made public.";
@@ -1265,13 +1758,27 @@
                         message = "The submission is made private.";
                       }
                       $rootScope.notify("success", message);
+                      if (vm.isCurrentPhaseRestrictedToSelectOneSubmission) {
+                        $mdDialog.hide();
+                        if (vm.previousPublicSubmissionId != submission_id) {
+                            vm.submissionVisibility[vm.previousPublicSubmissionId] = false;
+                            vm.previousPublicSubmissionId = submission_id;
+                        } else {
+                            vm.previousPublicSubmissionId = null;
+                        }
+                        vm.submissionVisibility[submission_id] = submissionVisibility;
+                      }
                     }
                 },
                 onError: function(response) {
                     var error = response.data;
                     var status = response.status;
-                    if(status === 400 || status === 403 ) {
+                    if (status === 400 || status === 403) {
                        $rootScope.notify("error", error.error);
+                    }
+                    if (vm.isCurrentPhaseRestrictedToSelectOneSubmission) {
+                       $mdDialog.hide();
+                       vm.submissionVisibility[submission_id] = !vm.submissionVisibility[submission_id];
                     }
                 }
             };
@@ -1358,49 +1865,64 @@
         vm.fileTypes = [{ 'name': 'csv' }];
         vm.fields = [{
             'label': 'Team Name',
-            'id': 'participant_team' 
+            'id': 'participant_team'
         },{
             'label': 'Team Members',
-            'id': 'participant_team_members' 
+            'id': 'participant_team_members'
         },{
             'label': 'Team Members Email Id',
-            'id': 'participant_team_members_email' 
+            'id': 'participant_team_members_email'
         },{
             'label': 'Team Members Affiliation',
-            'id': 'participant_team_members_affiliation' 
+            'id': 'participant_team_members_affiliation'
         },{
             'label': 'Challenge Phase',
-            'id': 'challenge_phase' 
+            'id': 'challenge_phase'
         },{
             'label': 'Status',
-            'id': 'status' 
+            'id': 'status'
         },{
             'label': 'Created By',
-            'id': 'created_by' 
+            'id': 'created_by'
         },{
             'label': 'Execution Time',
-            'id': 'execution_time' 
+            'id': 'execution_time'
         },{
             'label': 'Submission Number',
-            'id': 'submission_number' 
+            'id': 'submission_number'
         },{
             'label': 'Submitted File',
-            'id': 'input_file' 
+            'id': 'input_file'
         },{
             'label': 'Stdout File',
-            'id': 'stdout_file' 
+            'id': 'stdout_file'
         },{
             'label': 'Stderr File',
-            'id': 'stderr_file' 
+            'id': 'stderr_file'
         },{
             'label': 'Submitted At',
-            'id': 'created_at' 
+            'id': 'created_at'
         },{
             'label': 'Submission Result File',
-            'id': 'submission_result_file' 
+            'id': 'submission_result_file'
         },{
             'label': 'Submission Metadata File',
-            'id': 'submission_metadata_file' 
+            'id': 'submission_metadata_file'
+        },{
+            'label': 'Method Name',
+            'id': 'method_name'
+        },{
+            'label': 'Method Description',
+            'id': 'method_description'
+        },{
+            'label': 'Publication URL',
+            'id': 'publication_url'
+        },{
+            'label': 'Project URL',
+            'id': 'project_url'
+        },{
+            'label': 'Submission Meta Attributes',
+            'id': 'submission_meta_attributes'
         }];
 
         vm.downloadChallengeSubmissions = function() {
@@ -1449,13 +1971,24 @@
                     };
                     utilities.sendRequest(parameters);
                 }
-                
+
             } else {
                 $rootScope.notify("error", "Please select a challenge phase!");
             }
         };
 
-        vm.showMdDialog = function(ev, submissionId) {
+        vm.isOptionChecked = function (option, attribute) {
+            if(
+                attribute.values.findIndex((el) => {
+                    return el===option;
+                }) !== -1
+            ) {
+                return true;
+            }
+            return false;
+        };
+
+        vm.showMdDialog = function (ev, submissionId) {
             for (var i = 0; i < vm.submissionResult.count; i++) {
                 if (vm.submissionResult.results[i].id === submissionId) {
                     vm.submissionMetaData = vm.submissionResult.results[i];
@@ -1467,13 +2000,76 @@
             vm.project_url = vm.submissionMetaData.project_url;
             vm.publication_url = vm.submissionMetaData.publication_url;
             vm.submissionId = submissionId;
-
+            if (vm.submissionMetaData.submission_metadata != null) {
+                vm.currentSubmissionMetaData = JSON.parse(JSON.stringify(vm.submissionMetaData.submission_metadata));
+            }
             $mdDialog.show({
                 scope: $scope,
                 preserveScope: true,
                 targetEvent: ev,
-                templateUrl: 'dist/views/web/challenge/update-submission-metadata.html'
+                templateUrl: 'dist/views/web/challenge/update-submission-metadata.html',
             });
+        };
+
+        vm.showVisibilityDialog = function(submissionId, submissionVisibility) {
+            vm.submissionId = submissionId;
+            // Show modal only when submission is being made public
+            if (submissionVisibility) {
+                // Show pop up only when there's a submission already selected
+                if (vm.previousPublicSubmissionId) {
+                    $mdDialog.show({
+                        scope: $scope,
+                        preserveScope: true,
+                        templateUrl: 'dist/views/web/challenge/update-submission-visibility.html'
+                    });
+                } else {
+                    vm.changeSubmissionVisibility(submissionId, submissionVisibility);
+                }
+            } else {
+                // Case when a submission is made private
+                vm.changeSubmissionVisibility(submissionId, submissionVisibility);
+            }
+        };
+
+        vm.cancelSubmission = function(submissionId) {
+            parameters.url = "jobs/challenges/" + vm.challengeId + "/submissions/" + submissionId + "/update_submission_meta/";
+            parameters.method = 'PATCH';
+            parameters.data = {
+                "status": "cancelled",
+            };
+            parameters.callback = {
+                onSuccess: function(response) {
+                    var status = response.status;
+                    if (status === 200) {
+                        $mdDialog.hide();
+                        $rootScope.notify("success", "Submission cancelled successfully!");
+                    }
+                },
+                onError: function(response) {
+                    $mdDialog.hide();
+                    var error = response.data;
+                    $rootScope.notify("error", error);
+                }
+            };
+
+            utilities.sendRequest(parameters);
+        };
+
+        vm.showCancelSubmissionDialog = function(submissionId, status) {
+            if (status != "submitted") {
+                $rootScope.notify("error", "Only unproccessed submissions can be cancelled");
+                return;
+            }
+            vm.submissionId = submissionId;
+            $mdDialog.show({
+                scope: $scope,
+                preserveScope: true,
+                templateUrl: 'dist/views/web/challenge/cancel-submission.html'
+            });
+        };
+
+        vm.hideDialog = function() {
+            $mdDialog.hide();
         };
 
         vm.updateSubmissionMetaData = function(updateSubmissionMetaDataForm) {
@@ -1484,7 +2080,8 @@
                     "method_name": vm.method_name,
                     "method_description": vm.method_description,
                     "project_url": vm.project_url,
-                    "publication_url": vm.publication_url
+                    "publication_url": vm.publication_url,
+                    "submission_metadata": vm.currentSubmissionMetaData
                 };
                 parameters.callback = {
                     onSuccess: function(response) {
@@ -1492,6 +2089,9 @@
                         if (status === 200) {
                             $mdDialog.hide();
                             $rootScope.notify("success", "The data is successfully updated!");
+                            if(vm.currentSubmissionMetaData != null) {
+                                vm.submissionMetaData.submission_metadata = JSON.parse(JSON.stringify(vm.currentSubmissionMetaData));
+                            }
                         }
                     },
                     onError: function(response) {
@@ -1505,6 +2105,27 @@
             } else {
                 $mdDialog.hide();
             }
+        };
+
+        vm.verifySubmission = function(submissionId, isVerified) {
+            parameters.url = "jobs/challenges/" + vm.challengeId + "/submissions/" + submissionId + "/update_submission_meta/";
+            parameters.method = 'PATCH';
+            parameters.data = {
+                "is_verified_by_host": isVerified,
+            };
+            parameters.callback = {
+                onSuccess: function(response) {
+                    var status = response.status;
+                    if (status === 200) {
+                        $rootScope.notify("success", "Verification status updated successfully!");
+                    }
+                },
+                onError: function(response) {
+                    var error = response.data;
+                    $rootScope.notify("error", error);
+                }
+            };
+            utilities.sendRequest(parameters);
         };
 
         vm.isStarred = function() {
@@ -1614,7 +2235,7 @@
         };
 
         vm.deleteChallenge = function(deleteChallengeForm) {
-            if(deleteChallengeForm){
+            if (deleteChallengeForm){
                 var parameters = {};
                 parameters.url = "challenges/challenge/" + vm.challengeId + "/disable";
                 parameters.method = 'POST';
@@ -1755,6 +2376,13 @@
 
         vm.editEvalScript = function(editEvaluationCriteriaForm) {
             if (editEvaluationCriteriaForm) {
+                if (vm.editEvaluationScript === undefined || vm.editEvaluationScript === null
+                     || vm.editEvaluationScript === "") {
+                    var error = "Please upload a valid evaluation script!";
+                    $mdDialog.hide();
+                    $rootScope.notify("error", error);
+                    return;
+                }
                 var formData = new FormData();
                 formData.append("evaluation_script", vm.editEvaluationScript);
                 var challengeHostList = utilities.getData("challengeCreator");
@@ -1891,6 +2519,7 @@
         vm.challengePhaseDialog = function(ev, phase) {
             vm.page.challenge_phase = phase;
             vm.page.max_submissions_per_day = phase.max_submissions_per_day;
+            vm.page.max_submissions_per_month = phase.max_submissions_per_month;
             vm.phaseStartDate = moment(phase.start_date);
             vm.phaseEndDate = moment(phase.end_date);
             vm.testAnnotationFile = null;
@@ -1916,7 +2545,9 @@
                 formData.append("start_date", vm.phaseStartDate.toISOString());
                 formData.append("end_date", vm.phaseEndDate.toISOString());
                 formData.append("max_submissions_per_day", vm.page.challenge_phase.max_submissions_per_day);
+                formData.append("max_submissions_per_month", vm.page.challenge_phase.max_submissions_per_month);
                 formData.append("max_submissions", vm.page.challenge_phase.max_submissions);
+                formData.append("max_concurrent_submissions_allowed", vm.page.challenge_phase.max_concurrent_submissions_allowed); 
                 if (vm.testAnnotationFile) {
                     formData.append("test_annotation", vm.testAnnotationFile);
                 }
@@ -1974,8 +2605,8 @@
                           .title('Make this challenge ' + vm.toggleChallengeState + '?')
                           .ariaLabel('')
                           .targetEvent(ev)
-                          .ok('I\'m sure')
-                          .cancel('No.');
+                          .ok('Yes')
+                          .cancel('No');
 
             $mdDialog.show(confirm).then(function() {
                 parameters.url = "challenges/challenge_host_team/" + vm.page.creator.id + "/challenge/" + vm.page.id;
@@ -2066,6 +2697,7 @@
         $scope.$on('$destroy', function() {
             vm.stopFetchingSubmissions();
             vm.stopLeaderboard();
+            vm.stopLoadingLogs();
         });
 
         $rootScope.$on('$stateChangeStart', function() {
@@ -2100,7 +2732,10 @@
             }
         };
 
-        
+        vm.encodeMetricURI = function(metric) {
+            return encodeURIComponent(metric);
+        };
+
     }
 
 })();

@@ -3,6 +3,7 @@ from __future__ import unicode_literals
 import logging
 
 from django.contrib.auth.models import User
+from django.contrib.postgres.fields import ArrayField, JSONField
 from django.db import models
 from django.db.models import Max
 from rest_framework.exceptions import PermissionDenied
@@ -47,6 +48,8 @@ class Submission(TimeStampedModel):
     CANCELLED = "cancelled"
     FINISHED = "finished"
     SUBMITTING = "submitting"
+    ARCHIVED = "archived"
+    PARTIALLY_EVALUATED = "partially_evaluated"
 
     STATUS_OPTIONS = (
         (SUBMITTED, SUBMITTED),
@@ -55,15 +58,17 @@ class Submission(TimeStampedModel):
         (CANCELLED, CANCELLED),
         (FINISHED, FINISHED),
         (SUBMITTING, SUBMITTING),
+        (ARCHIVED, ARCHIVED),
+        (PARTIALLY_EVALUATED, PARTIALLY_EVALUATED),
     )
 
     participant_team = models.ForeignKey(
-        ParticipantTeam, related_name="submissions"
+        ParticipantTeam, related_name="submissions", on_delete=models.CASCADE
     )
     challenge_phase = models.ForeignKey(
-        ChallengePhase, related_name="submissions"
+        ChallengePhase, related_name="submissions", on_delete=models.CASCADE
     )
-    created_by = models.ForeignKey(User)
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE)
     status = models.CharField(
         max_length=30, choices=STATUS_OPTIONS, db_index=True
     )
@@ -76,9 +81,17 @@ class Submission(TimeStampedModel):
     started_at = models.DateTimeField(null=True, blank=True, db_index=True)
     completed_at = models.DateTimeField(null=True, blank=True, db_index=True)
     when_made_public = models.DateTimeField(null=True, blank=True)
+    # Model to store submitted submission files by the user
     input_file = models.FileField(
         upload_to=RandomFileName("submission_files/submission_{id}")
     )
+    submission_input_file = models.FileField(
+        upload_to=RandomFileName("submission_files/submission_{id}"),
+        null=True,
+        blank=True,
+    )
+    # Model to store large submission file (> 400 MB's) URLs submitted by the user
+    input_file_url = models.URLField(max_length=1000, null=True, blank=True)
     stdout_file = models.FileField(
         upload_to=RandomFileName("submission_files/submission_{id}"),
         null=True,
@@ -107,6 +120,16 @@ class Submission(TimeStampedModel):
     publication_url = models.CharField(max_length=1000, default="", blank=True)
     project_url = models.CharField(max_length=1000, default="", blank=True)
     is_baseline = models.BooleanField(default=False)
+    job_name = ArrayField(
+        models.TextField(null=True, blank=True),
+        default=list,
+        blank=True,
+        null=True,
+    )
+    ignore_submission = models.BooleanField(default=False)
+    # Store the values of meta attributes for the submission here.
+    submission_metadata = JSONField(blank=True, null=True)
+    is_verified_by_host = models.BooleanField(default=False)
 
     def __str__(self):
         return "{}".format(self.id)
@@ -230,11 +253,6 @@ class Submission(TimeStampedModel):
                         "error": "The maximum number of submission for today has been reached"
                     }
                 )
-
-            self.is_public = (
-                True if self.challenge_phase.is_submission_public else False
-            )
-
             self.status = Submission.SUBMITTED
 
         submission_instance = super(Submission, self).save(*args, **kwargs)

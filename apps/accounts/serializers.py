@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 
+from .models import JwtToken, Profile
 from rest_framework import serializers
 
 
@@ -27,9 +28,15 @@ class ProfileSerializer(UserDetailsSerializer):
     """
 
     affiliation = serializers.CharField(source="profile.affiliation")
-    github_url = serializers.URLField(source="profile.github_url", allow_blank=True)
-    google_scholar_url = serializers.URLField(source="profile.google_scholar_url", allow_blank=True)
-    linkedin_url = serializers.URLField(source="profile.linkedin_url", allow_blank=True)
+    github_url = serializers.URLField(
+        source="profile.github_url", allow_blank=True
+    )
+    google_scholar_url = serializers.URLField(
+        source="profile.google_scholar_url", allow_blank=True
+    )
+    linkedin_url = serializers.URLField(
+        source="profile.linkedin_url", allow_blank=True
+    )
 
     class Meta(UserDetailsSerializer.Meta):
         fields = (
@@ -41,7 +48,7 @@ class ProfileSerializer(UserDetailsSerializer):
             "affiliation",
             "github_url",
             "google_scholar_url",
-            "linkedin_url"
+            "linkedin_url",
         )
 
     def update(self, instance, validated_data):
@@ -63,3 +70,32 @@ class ProfileSerializer(UserDetailsSerializer):
             profile.linkedin_url = linkedin_url
             profile.save()
         return instance
+
+
+class UserProfileSerializer(UserDetailsSerializer):
+    """
+    Serializer to fetch the user profile.
+    """
+
+    class Meta:
+        model = Profile
+        fields = (
+            "affiliation",
+            "github_url",
+            "google_scholar_url",
+            "linkedin_url",
+        )
+
+
+class JwtTokenSerializer(serializers.ModelSerializer):
+    """
+    Serializer to update JWT token.
+    """
+
+    class Meta:
+        model = JwtToken
+        fields = (
+            "user",
+            "refresh_token",
+            "access_token",
+        )

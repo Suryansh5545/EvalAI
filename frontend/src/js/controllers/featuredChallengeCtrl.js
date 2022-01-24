@@ -6,9 +6,9 @@
         .module('evalai')
         .controller('FeaturedChallengeCtrl', FeaturedChallengeCtrl);
 
-    FeaturedChallengeCtrl.$inject = ['utilities', 'loaderService','$scope', '$state', '$http', '$stateParams', 'moment'];
+    FeaturedChallengeCtrl.$inject = ['utilities', 'loaderService', '$state', '$stateParams', 'moment'];
 
-    function FeaturedChallengeCtrl(utilities, loaderService, $scope, $state, $http, $stateParams, moment) {
+    function FeaturedChallengeCtrl(utilities, loaderService, $state, $stateParams, moment) {
         var vm = this;
         vm.challengeId = $stateParams.challengeId;
         vm.phaseSplitId = $stateParams.phaseSplitId;
@@ -111,7 +111,7 @@
         vm.getLeaderboard = function(phaseSplitId) {
             vm.isResult = true;
             vm.phaseSplitId = phaseSplitId;
-            // loader for exisiting teams
+            // loader for existing teams
             vm.isExistLoader = true;
             vm.loaderTitle = '';
             vm.loaderContainer = angular.element('.exist-team-card');

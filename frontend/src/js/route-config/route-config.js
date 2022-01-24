@@ -2,12 +2,15 @@
  * Config for the router
  */
 
-(function() {
+(function () {
+    'use strict';
     angular
         .module('evalai')
         .config(configure);
 
     var baseUrl = "dist/views";
+
+    configure.$inject = ['$stateProvider', '$urlRouterProvider', '$locationProvider', '$urlMatcherFactoryProvider'];
 
     function configure($stateProvider, $urlRouterProvider, $locationProvider, $urlMatcherFactoryProvider) {
 
@@ -265,9 +268,27 @@
             title: 'Leaderboard',
         };
 
+        var manage = {
+            name: "web.challenge-main.challenge-page.manage",
+            parent: "web.challenge-main.challenge-page",
+            url: "/manage",
+            templateUrl: baseUrl + "/web/challenge/manage.html",
+            controller: 'ChallengeCtrl',
+            controllerAs: 'challenge',
+        };
+
         var challenge_phase_leaderboard = {
             name: "web.challenge-main.challenge-page.phase-leaderboard",
             url: "/leaderboard/:phaseSplitId",
+            controller: 'ChallengeCtrl',
+            controllerAs: 'challenge',
+            templateUrl: baseUrl + "/web/challenge/leaderboard.html",
+            title: 'Leaderboard'
+        };
+
+        var challenge_phase_metric_leaderboard = {
+            name: "web.challenge-main.challenge-page.phase-metric-leaderboard",
+            url: "/leaderboard/:phaseSplitId/:metric",
             controller: 'ChallengeCtrl',
             controllerAs: 'challenge',
             templateUrl: baseUrl + "/web/challenge/leaderboard.html",
@@ -434,7 +455,7 @@
             title: 'Leaderboard'
         };
 
-        var challenge_invitation = {
+        var challengeInvitation = {
             name: "challenge-invitation",
             url: "/accept-invitation/:invitationKey",
             controller: "ChallengeInviteCtrl",
@@ -491,6 +512,7 @@
         $stateProvider.state(my_challenge_all_submission);
         $stateProvider.state(leaderboard);
         $stateProvider.state(challenge_phase_leaderboard);
+        $stateProvider.state(challenge_phase_metric_leaderboard);
 
         // featured challenge details
         $stateProvider.state(featured_challenge_page);
@@ -513,8 +535,10 @@
         $stateProvider.state(get_involved);
         $stateProvider.state(update_profile);
         $stateProvider.state(contact_us);
-        $stateProvider.state(challenge_invitation);
+        $stateProvider.state(challengeInvitation);
         $stateProvider.state(get_submission_related_files);
+
+        $stateProvider.state(manage);
 
         $urlRouterProvider.otherwise(function($injector, $location) {
             var state = $injector.get('$state');
@@ -526,12 +550,16 @@
 })();
 
 // define run block here
-(function() {
+(function () {
+    
+    'use strict';
 
     angular
         .module('evalai')
         .run(runFunc);
 
+    runFunc.$inject = ['$rootScope', '$state', 'utilities', '$window', '$location', 'toaster'];
+    
     function runFunc($rootScope, $state, utilities, $window, $location, toaster) {
         // setting timout for token (7days)
         // var getTokenTime = utilities.getData('tokenTime');
@@ -588,7 +616,7 @@
                 return (typeof arg === undefined ? def : arg);
             }
 
-            timeout = pick(timeout, 3000);
+            timeout = pick(timeout, 5000);
             toaster.pop({
                 type: type,
                 body: message,
@@ -606,7 +634,7 @@
                 onSuccess: function() {
                     utilities.resetStorage();
                     $rootScope.isLoader = false;
-                    $state.go("auth.login");
+                    $state.go("home");
                     $rootScope.isAuth = false;
                     $rootScope.notify("info", "Successfully logged out!");
                 },

@@ -1,3 +1,4 @@
+<section ng-if="challenge.isParticipant">
 <section ng-if="challenge.isActive" class="ev-sm-container ev-view challenge-container">
     <div class="ev-md-container ev-card-panel ev-z-depth-5 ev-challenge-view margin-btm-0">
         <div class="row margin-bottom-cancel">
@@ -516,5 +517,12 @@
 <section ng-if="!challenge.isActive" class="ev-sm-container ev-view challenge-container">
     <div class="ev-md-container ev-card-panel ev-z-depth-5 ev-challenge-view">
         <p class="fs-16 w-300">Sorry, the challenge is not active.</p>
+    </div>
+</section>
+</section>
+
+<section ng-if="!challenge.isParticipant" class="ev-sm-container ev-view challenge-container">
+    <div class="ev-md-container ev-card-panel ev-z-depth-5 ev-challenge-view">
+        <p class="fs-16 w-300">You are not registered for this challenge.</p>
     </div>
 </section>

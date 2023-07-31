@@ -286,9 +286,15 @@
             parameters.callback = {
                 onSuccess: function(response) {
                      var details = response.data;
-                    vm.participated_team_name = details["team_name"];
+                    vm.participated_team_name = details.participant_team.team_name;
                     vm.eligible_to_submit = details["approved"];
+                    vm.isParticipant = true;
                 },
+                onError: function(response) {
+                    var error = response.data;
+                    $rootScope.notify("error", error.error);
+                    vm.isParticipant = false;
+                }
             };
             utilities.sendRequest(parameters);
         };

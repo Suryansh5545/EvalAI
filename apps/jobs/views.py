@@ -3008,7 +3008,7 @@ def update_submission_meta(request, challenge_pk, submission_pk):
             return Response(
                 serializer.errors, status=status.HTTP_400_BAD_REQUEST
             )
-        
+
 
 @api_view(["PUT"])
 @throttle_classes([UserRateThrottle])
@@ -3054,7 +3054,13 @@ def create_or_update_leaderboard_data(request):
         result = request.data.get("result")
 
         leaderboard = Leaderboard.objects.get(id=leaderboard_id)
-        submission = get_submission_model(submission_id)
+        try:
+            submission = get_submission_model(submission_id)
+        except Submission.DoesNotExist:
+            response_data = {
+                "error": "Submission {} does not exist".format(submission_id)
+            }
+            return Response(response_data, status=status.HTTP_404_NOT_FOUND)
 
         try:
             results = json.loads(result)
@@ -3064,10 +3070,16 @@ def create_or_update_leaderboard_data(request):
                 "Please try again with correct format.".format(str(exc))
             }
             return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
-        
+
         for phase_result in results:
             accuracies = phase_result.get("accuracies")
-        challenge_phase_split = get_challenge_phase_split_model(challenge_phase_split_id)
+        try:
+            challenge_phase_split = get_challenge_phase_split_model(challenge_phase_split_id)
+        except ChallengePhaseSplit.DoesNotExist:
+            response_data = {
+                "error": "Challenge Phase Split {} does not exist".format(challenge_phase_split_id)
+            }
+            return Response(response_data, status=status.HTTP_404_NOT_FOUND)
         leaderboard_metrics = (
             challenge_phase_split.leaderboard.schema.get("labels")
         )
@@ -3116,7 +3128,7 @@ def create_or_update_leaderboard_data(request):
                     "challenge_phase_split": challenge_phase_split,
                     "submission": submission,
                     "request": request
-                    },
+                },
             )
         else:
             serializer = CreateLeaderboardDataSerializer(
@@ -3125,7 +3137,7 @@ def create_or_update_leaderboard_data(request):
                     "challenge_phase_split": challenge_phase_split,
                     "submission": submission,
                     "request": request
-                    },
+                },
             )
 
         if serializer.is_valid():
